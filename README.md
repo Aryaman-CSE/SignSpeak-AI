@@ -2,139 +2,141 @@ SignSpeak AI
 
 Real-Time Sign Language Detection Using Deep Learning
 
-SignSpeak AI is a computer-vision and deep-learning project developed to recognize American Sign Language (ASL) alphabet signs using an object-detection model.
+SignSpeak AI is a computer-vision and deep-learning project for recognizing American Sign Language (ASL) alphabet signs A–Z using an object-detection pipeline built with TensorFlow and SSD MobileNet V2 FPNLite.
 
-The project uses the TensorFlow Object Detection API with SSD MobileNet V2 FPNLite and transfer learning from COCO-pretrained weights. An annotated ASL alphabet dataset is processed into TensorFlow-compatible TFRecords and used to fine-tune a 26-class object-detection model.
+<p align="center">
+  <b>Dataset → Preprocessing → TFRecords → Transfer Learning → Detection</b>
+</p>
 
-The current implementation establishes the core machine-learning pipeline required for ASL sign detection. Future development will extend the trained detector toward real-time webcam inference, prediction stabilization, word formation, and continuous sign-language interpretation.
+Overview
 
-1. Project Overview
+SignSpeak AI treats ASL alphabet recognition as an object-detection problem rather than simple image classification.
 
-Communication through sign language relies heavily on visual information such as hand shape, orientation, and position. A computer-vision system can process this visual information and identify recognizable sign patterns.
+For each input image, the system is designed to:
 
-SignSpeak AI approaches this problem as an object-detection task.
+detect the location of the hand sign,
 
-Instead of only classifying an image, the model is designed to:
+identify the corresponding ASL alphabet class,
 
-Locate the hand sign within an image.
+assign a confidence score,
 
-Identify which ASL alphabet class it represents.
+and return a bounding box around the detected sign.
 
-Assign a confidence score to the prediction.
+The current implementation focuses on the 26 ASL alphabet classes (A–Z) and establishes the machine-learning pipeline required for future real-time webcam detection.
 
-Return a bounding box around the detected sign.
+Pipeline
 
-The current model contains 26 classes corresponding to the letters A–Z.
+                 ┌─────────────────────┐
+                 │    ASL Dataset      │
+                 │  1,728 Images A–Z   │
+                 └──────────┬──────────┘
+                            ↓
+                 ┌─────────────────────┐
+                 │ Data Preprocessing  │
+                 │   + Verification    │
+                 └──────────┬──────────┘
+                            ↓
+                 ┌─────────────────────┐
+                 │ Pascal VOC XML      │
+                 │   Annotations       │
+                 └──────────┬──────────┘
+                            ↓
+                 ┌─────────────────────┐
+                 │ TFRecord Generation │
+                 └──────────┬──────────┘
+                            ↓
+                 ┌─────────────────────┐
+                 │ SSD MobileNet V2    │
+                 │      FPNLite        │
+                 └──────────┬──────────┘
+                            ↓
+                 ┌─────────────────────┐
+                 │   Transfer Learning │
+                 │   + Fine-Tuning     │
+                 └──────────┬──────────┘
+                            ↓
+                 ┌─────────────────────┐
+                 │ 26-Class ASL Model  │
+                 └──────────┬──────────┘
+                            ↓
+                 ┌─────────────────────┐
+                 │ Future: Live Camera │
+                 │      Detection      │
+                 └─────────────────────┘
 
-Core Concept
+Project Status
 
-Camera / Image
-      ↓
-Image Preprocessing
-      ↓
-SSD MobileNet Object Detection
-      ↓
-Bounding Box Detection
-      ↓
-ASL Letter Classification
-      ↓
-A–Z Prediction
-      ↓
-Future: Words → Sentences
+Component
 
-2. Problem Statement
+Status
 
-Sign language provides an important means of communication, but conventional computer systems are primarily designed to process typed or spoken language.
+Development environment
 
-The challenge addressed by this project is to develop a computer-vision pipeline capable of recognizing visual ASL hand signs and converting them into machine-understandable alphabet predictions.
+✅ Complete
 
-The project focuses on:
+ASL dataset integration
 
-Detecting hand signs from visual input.
+✅ Complete
 
-Localizing signs using bounding boxes.
+Dataset verification
 
-Distinguishing between 26 ASL alphabet classes.
+✅ Complete
 
-Preparing annotated image datasets for deep-learning training.
+Pascal VOC processing
 
-Applying transfer learning to an object-detection model.
+✅ Complete
 
-Building a foundation for real-time sign recognition.
+A–Z label mapping
 
-3. Objectives
+✅ Complete
 
-Develop an ASL alphabet detection system.
+Train/test split
 
-Recognize all 26 ASL alphabet classes from A–Z.
+✅ Complete
 
-Use object detection rather than simple image classification.
+TFRecord generation
 
-Detect and localize hand signs using bounding boxes.
+✅ Complete
 
-Use transfer learning to reduce training requirements.
+SSD MobileNet configuration
 
-Build the complete dataset-to-model training pipeline.
+✅ Complete
 
-Prepare the system for future real-time webcam inference.
+Transfer-learning setup
 
-Establish a scalable foundation for letter-to-word and continuous sign recognition.
+✅ Complete
 
-4. System Architecture
+Pipeline validation
 
-                    ┌──────────────────────┐
-                    │    ASL Dataset       │
-                    │  1,728 Images A–Z    │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ Data Preprocessing    │
-                    │ Verification + Split │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ Pascal VOC XML       │
-                    │ Bounding Annotations │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ TFRecord Conversion  │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-              ┌─────────────────────────────────┐
-              │ SSD MobileNet V2 FPNLite       │
-              │ COCO Pretrained Model          │
-              └───────────────┬─────────────────┘
-                              │
-                              ▼
-                    ┌──────────────────────┐
-                    │ Transfer Learning     │
-                    │ / Fine-Tuning         │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ Trained 26-Class     │
-                    │ ASL Detector         │
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │ Future Real-Time     │
-                    │ Webcam Detection     │
-                    └──────────────────────┘
+✅ Complete
 
-5. Dataset
+10,000-step fine-tuning
 
-The project uses an American Sign Language alphabet object-detection dataset containing images representing the complete ASL alphabet.
+✅ Complete
 
-Dataset Statistics
+Quantitative evaluation
 
-Property
+🔄 Pending
+
+Webcam inference
+
+🔄 Planned
+
+Word formation
+
+🔄 Planned
+
+Continuous recognition
+
+🔄 Planned
+
+Dataset
+
+The project uses an ASL alphabet object-detection dataset containing annotated images for all 26 alphabet classes.
+
+Dataset at a glance
+
+Metric
 
 Value
 
@@ -146,14 +148,6 @@ Classes
 
 26
 
-Class Range
-
-A–Z
-
-Annotation Format
-
-Pascal VOC XML
-
 Training Images
 
 1,382
@@ -162,24 +156,24 @@ Testing Images
 
 346
 
-Dataset Split
+Split
 
-80:20
+80 : 20
+
+Annotation Format
+
+Pascal VOC XML
 
 Annotation Type
 
 Bounding Boxes
-
-Each image is paired with a Pascal VOC XML annotation containing the object class and bounding-box coordinates.
 
 Classes
 
 A  B  C  D  E  F  G  H  I  J  K  L  M
 N  O  P  Q  R  S  T  U  V  W  X  Y  Z
 
-6. Dataset Preparation
-
-The dataset preparation workflow is:
+Dataset Workflow
 
 Raw Dataset
      ↓
@@ -192,191 +186,14 @@ A–Z Label Mapping
 80:20 Train/Test Split
      ↓
 Pascal VOC → TFRecord
-     ↓
-TensorFlow Object Detection Pipeline
 
-The final dataset split contains:
-
-1,382 training images
-
-346 testing images
-
-1,728 total images
-
-7. Annotation Format
-
-The dataset uses the Pascal VOC XML annotation format.
-
-Each annotation contains information such as:
-
-Image filename
-
-Image dimensions
-
-Object class
-
-Bounding-box coordinates
-
-Minimum and maximum X coordinates
-
-Minimum and maximum Y coordinates
-
-These annotations provide the spatial information required by the object-detection model.
-
-The annotations were converted into TensorFlow TFRecord format before training.
-
-8. Label Mapping
-
-The model uses a 26-class label map.
-
-ID
-
-Class
-
-1
-
-A
-
-2
-
-B
-
-3
-
-C
-
-4
-
-D
-
-5
-
-E
-
-6
-
-F
-
-7
-
-G
-
-8
-
-H
-
-9
-
-I
-
-10
-
-J
-
-11
-
-K
-
-12
-
-L
-
-13
-
-M
-
-14
-
-N
-
-15
-
-O
-
-16
-
-P
-
-17
-
-Q
-
-18
-
-R
-
-19
-
-S
-
-20
-
-T
-
-21
-
-U
-
-22
-
-V
-
-23
-
-W
-
-24
-
-X
-
-25
-
-Y
-
-26
-
-Z
-
-The label map is stored at:
-
-Tensorflow/workspace/annotations/label_map.pbtxt
-
-9. TFRecord Generation
-
-TensorFlow Object Detection models use TFRecord files for efficient training-data ingestion.
-
-The project converts Pascal VOC annotations into:
-
-train.record
-test.record
-
-The generated records contain:
-
-Encoded image data
-
-Image dimensions
-
-Bounding-box coordinates
-
-Class labels
-
-Class IDs
-
-TFRecords are generated training artifacts and are intentionally excluded from Git version control.
-
-10. Model
+Model
 
 SSD MobileNet V2 FPNLite
 
-The selected architecture is:
+The project uses SSD MobileNet V2 FPNLite 320×320 through the TensorFlow Object Detection API.
 
-SSD MobileNet V2 FPNLite 320×320
-
-SSD stands for Single Shot Detector. The architecture performs object detection in a single forward pass and is designed to provide a practical balance between detection capability and computational requirements.
-
-Model Configuration
-
-Parameter
+Configuration
 
 Value
 
@@ -384,11 +201,11 @@ Architecture
 
 SSD MobileNet V2 FPNLite
 
-Input Size
+Input Resolution
 
 320 × 320
 
-Detection Classes
+Number of Classes
 
 26
 
@@ -404,57 +221,182 @@ Initial Weights
 
 COCO
 
-Training Method
+Training Strategy
 
 Transfer Learning
 
-11. Transfer Learning
+SSD provides single-shot object detection, while MobileNet provides a relatively lightweight feature-extraction backbone suitable for practical detection workflows.
 
-The detector is initialized using COCO-pretrained weights rather than training the object detector entirely from random initialization.
+Transfer Learning
 
-COCO Pretrained SSD MobileNet
-             ↓
-       Load Checkpoint
-             ↓
-      Configure 26 Classes
-             ↓
-          Fine-Tuning
-             ↓
-      ASL Detection Model
+The model was initialized from COCO-pretrained weights and adapted to the 26-class ASL detection task.
 
-Transfer learning provides a starting point with learned visual representations that can be adapted to the ASL detection task.
+COCO Pretrained Model
+        ↓
+Load Checkpoint
+        ↓
+Configure 26 ASL Classes
+        ↓
+Fine-Tune
+        ↓
+ASL Detection Model
 
-12. Training Configuration
+This approach avoids training the complete detector entirely from random initialization.
 
-The model configuration is stored at:
+Annotation & TFRecords
 
-Tensorflow/workspace/models/pipeline.config
+The dataset uses Pascal VOC XML annotations.
 
-The configuration was modified for:
+Each annotation provides:
 
-num_classes: 26
+image filename,
 
-The training pipeline uses:
+image dimensions,
 
-SSD MobileNet V2 FPNLite
+object class,
 
-320×320 input resolution
+bounding-box coordinates,
 
-COCO pretrained checkpoint
+object location information.
 
-26 ASL classes
+The annotations are converted into TensorFlow TFRecords for model training.
 
-TensorFlow Object Detection API
+Generated records
 
-13. Training
+train.record
+test.record
+
+These are generated artifacts and are intentionally excluded from version control.
+
+Label Map
+
+The project maps each alphabet letter to a unique class ID.
+
+ID
+
+Class
+
+ID
+
+Class
+
+1
+
+A
+
+14
+
+N
+
+2
+
+B
+
+15
+
+O
+
+3
+
+C
+
+16
+
+P
+
+4
+
+D
+
+17
+
+Q
+
+5
+
+E
+
+18
+
+R
+
+6
+
+F
+
+19
+
+S
+
+7
+
+G
+
+20
+
+T
+
+8
+
+H
+
+21
+
+U
+
+9
+
+I
+
+22
+
+V
+
+10
+
+J
+
+23
+
+W
+
+11
+
+K
+
+24
+
+X
+
+12
+
+L
+
+25
+
+Y
+
+13
+
+M
+
+26
+
+Z
+
+Label map:
+
+Tensorflow/workspace/annotations/label_map.pbtxt
+
+Training
 
 The model was fine-tuned for:
 
-10,000 training steps
+10,000 Training Steps
 
 Training was performed on the available CPU environment.
 
-The final recorded training step produced approximately:
+Final recorded training values
 
 Metric
 
@@ -476,105 +418,85 @@ Total Loss
 
 0.1757
 
-Training Interpretation
+Note: Training loss should not be interpreted as detection accuracy. Quantitative evaluation using metrics such as mAP, precision, and recall is still required.
 
-The reported training loss indicates that the model successfully optimized against the prepared training dataset.
-
-However, training loss is not equivalent to detection accuracy or mAP.
-
-A separate evaluation stage is required to obtain quantitative detection metrics such as:
-
-Precision
-
-Recall
-
-mAP
-
-Per-class performance
-
-Detection performance on unseen samples
-
-14. Training Pipeline
+Training Flow
 
 ASL Dataset
-     ↓
+    ↓
 Pascal VOC XML
-     ↓
+    ↓
 Dataset Verification
-     ↓
+    ↓
 Train/Test Split
-     ↓
-Label Map Creation
-     ↓
-TFRecord Generation
-     ↓
+    ↓
+Label Map
+    ↓
+TFRecords
+    ↓
 Pipeline Configuration
-     ↓
+    ↓
 COCO Checkpoint
-     ↓
-SSD MobileNet Fine-Tuning
-     ↓
+    ↓
+Fine-Tuning
+    ↓
 Training Checkpoints
 
-15. Software Environment
+Technology Stack
 
 Technology
 
-Version / Role
+Role
 
 Python
 
-3.10.x
+Core development
 
-TensorFlow
+TensorFlow 2.10.1
 
-2.10.1
-
-NumPy
-
-1.23.5
-
-OpenCV
-
-4.8.1.78
-
-TensorFlow IO
-
-0.27.0
-
-TF Models Official
-
-2.10.1
-
-LVIS
-
-Object Detection API dependency
+Deep-learning framework
 
 TensorFlow Object Detection API
 
-Model training
+Object-detection training
+
+SSD MobileNet V2 FPNLite
+
+Detection architecture
 
 OpenCV
 
-Future camera processing
+Image/video processing
 
-Visual Studio Code
+NumPy 1.23.5
 
-Development environment
+Numerical operations
+
+Pascal VOC
+
+Annotation format
+
+TFRecord
+
+TensorFlow training data
+
+COCO Weights
+
+Transfer-learning initialization
+
+VS Code
+
+Development
 
 PowerShell
 
-Development environment
+Environment and execution
 
-Git
+Git / GitHub
 
 Version control
 
-GitHub
-
-Repository hosting
-
-16. Project Structure
+Project Structure
 
 SignSpeak AI/
 │
@@ -602,11 +524,11 @@ SignSpeak AI/
 ├── README.md
 └── labelimg_error.txt
 
-Excluded Generated Files
+Files intentionally excluded
 
-Large or generated files are intentionally excluded from GitHub, including:
+To keep the repository manageable, the following are excluded through .gitignore:
 
-Raw image datasets
+Raw datasets
 
 TFRecord files
 
@@ -616,78 +538,86 @@ Training checkpoints
 
 Exported models
 
-TensorFlow Models repository
-
-Python cache files
+TensorFlow Models source repository
 
 Virtual environments
 
-This keeps the repository lightweight and focused on source code, configuration, and documentation.
+Python cache files
 
-17. Real-Time Detection Design
+Generated training artifacts
 
-The planned real-time component will use OpenCV to capture frames from a camera.
+Real-Time Detection
 
-Webcam
-   ↓
-Capture Frame
-   ↓
-Resize / Preprocess
-   ↓
-TensorFlow Inference
-   ↓
-Detection Boxes
-   ↓
-Class Predictions
-   ↓
-Confidence Filtering
-   ↓
-Display Bounding Box
-   ↓
-ASL Letter
+The planned real-time system will connect the trained model to an OpenCV camera feed.
 
-A confidence threshold can be applied to reduce low-confidence predictions.
+┌──────────────┐
+│    Webcam    │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Capture Frame│
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Preprocessing│
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│   Inference  │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│  Detection   │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ A–Z + Score  │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Bounding Box │
+└──────────────┘
 
-Current status: the real-time webcam component is planned and has not yet been completed.
+A confidence threshold can be used to filter weak predictions.
 
-18. Future Development
+Current status: webcam inference is a planned next stage and is not yet marked as completed.
 
-Stage 1 — Alphabet Detection
+Future Roadmap
+
+01 — Alphabet Detection
 
 Hand Sign → A–Z
 
-The current trained model establishes the alphabet-detection foundation.
+The current model establishes the alphabet-detection foundation.
 
-Stage 2 — Real-Time Detection
+02 — Live Webcam Detection
 
 Webcam → Detection → A–Z
 
-The trained model will be integrated with OpenCV for live camera inference.
+Integrate the trained detector with OpenCV.
 
-Stage 3 — Prediction Stabilization
+03 — Prediction Stabilization
 
-Temporal smoothing and confidence filtering can reduce unstable frame-to-frame predictions.
+Reduce frame-to-frame prediction noise using confidence filtering and temporal smoothing.
 
 Frame 1 → A
 Frame 2 → A
 Frame 3 → A
 Frame 4 → A
+       ↓
+ Stable A
 
-Stable Prediction → A
-
-Stage 4 — Word Formation
-
-Detected letters can be accumulated to form words.
+04 — Word Formation
 
 H → E → L → L → O
              ↓
            HELLO
 
-Stage 5 — Continuous Sign Recognition
+05 — Continuous Sign Recognition
 
-The system can eventually be extended from isolated alphabet signs toward continuous sequences of signs.
+Move from isolated alphabet signs toward continuous sign sequences.
 
-Stage 6 — Natural Language Output
+06 — Natural Language Output
 
 Hand Signs
     ↓
@@ -699,87 +629,29 @@ Sentences
     ↓
 Natural Language
 
-19. Current Project Status
+Current Limitations
 
-Completed
+Isolated Signs
 
-Development environment setup
-
-TensorFlow Object Detection API setup
-
-ASL alphabet dataset integration
-
-Dataset verification
-
-Pascal VOC annotation processing
-
-A–Z label mapping
-
-80:20 dataset split
-
-TFRecord generation
-
-SSD MobileNet V2 FPNLite configuration
-
-26-class model configuration
-
-COCO pretrained checkpoint integration
-
-Pipeline validation
-
-Model fine-tuning
-
-10,000 training steps completed
-
-Remaining
-
-Quantitative model evaluation
-
-mAP calculation
-
-Precision and recall analysis
-
-Unseen-image testing
-
-Webcam integration
-
-Real-time inference
-
-Temporal prediction stabilization
-
-Letter-to-word conversion
-
-Continuous sign recognition
-
-Natural-language output
-
-Robustness testing
-
-Model optimization
-
-20. Limitations
-
-Isolated Sign Recognition
-
-The current dataset focuses on individual ASL alphabet signs rather than continuous signing.
+The current dataset focuses on individual alphabet signs rather than continuous signing.
 
 Dataset Dependence
 
-Model performance depends on the visual characteristics represented in the training dataset.
+Detection performance depends on how well real-world visual conditions are represented by the training dataset.
 
-Real-World Conditions
+Environmental Variation
 
-Different lighting conditions, backgrounds, camera angles, hand orientations, and distances may affect detection performance.
+Lighting, background, camera angle, hand orientation, distance, and occlusion may affect predictions.
 
 Evaluation
 
-Training loss alone cannot establish real-world accuracy. Quantitative evaluation using appropriate detection metrics is required.
+The current training result provides loss values but does not yet provide a complete quantitative accuracy evaluation.
 
-Continuous Language
+Continuous Translation
 
-The current model recognizes alphabet classes and does not yet perform complete sentence-level sign-language translation.
+The current system recognizes alphabet classes and does not yet perform complete sentence-level sign-language translation.
 
-21. Team Contributions
+Team Contributions
 
 Member 1 — Dataset & Preprocessing
 
@@ -817,9 +689,9 @@ Training-loss monitoring
 
 Detection/inference pipeline preparation
 
-22. Key Learning Outcomes
+Learning Outcomes
 
-The project provides practical experience in:
+This project provides practical experience with:
 
 Computer vision
 
@@ -831,23 +703,25 @@ Transfer learning
 
 Dataset engineering
 
-Image annotation formats
+Pascal VOC annotations
 
 Bounding-box processing
 
-TensorFlow Object Detection API
-
 TFRecord generation
+
+TensorFlow Object Detection API
 
 Model configuration
 
-Model fine-tuning
+Fine-tuning
 
-Training debugging
+Training and debugging
 
 Real-time inference architecture
 
-A major engineering lesson from the project is that model performance depends not only on the neural network, but also on the consistency of the complete pipeline:
+Git and GitHub project management
+
+Core Engineering Principle
 
 Dataset
    ↓
@@ -865,22 +739,110 @@ Evaluation
    ↓
 Inference
 
-23. Reproducibility
+A reliable AI system depends on the consistency of the entire pipeline, not only the neural network.
 
-The repository contains the source code, configuration files, label map, and scripts required to understand and reproduce the project pipeline.
+Reproducibility
 
-Large files are intentionally excluded from GitHub to keep the repository manageable.
+The repository contains the project source code, configuration files, label map, and supporting scripts.
 
-The complete training environment additionally requires the corresponding dataset, TensorFlow Models/Object Detection API components, and pretrained checkpoint.
+Large generated files are excluded from GitHub.
 
-24. Repository
+To reproduce the complete training pipeline, the corresponding dataset, TensorFlow Models/Object Detection API components, and pretrained checkpoint are also required.
 
-GitHub:
-https://github.com/Aryaman-CSE/SignSpeak-AI
+Installation
 
-25. Project Vision
+Create a Python virtual environment:
 
-The long-term vision of SignSpeak AI is to create a computer-vision system capable of transforming visual sign-language communication into understandable digital language.
+python -m venv venv
+
+Activate it on Windows:
+
+venv\Scripts\Activate.ps1
+
+Install the primary dependencies:
+
+pip install tensorflow==2.10.1
+pip install numpy==1.23.5
+pip install opencv-python==4.8.1.78
+pip install tensorflow-io==0.27.0
+pip install lvis
+pip install tf-models-official==2.10.1
+
+The TensorFlow Object Detection API must also be available through the TensorFlow Models repository.
+
+Training Command
+
+After preparing the dataset and configuring the TensorFlow Object Detection API:
+
+$env:PYTHONPATH="$PWD\Tensorflow\models\research;$PWD\Tensorflow\models\research\slim"
+
+Run training with:
+
+python scripts\model_main_tf2.py `
+--model_dir=Tensorflow\workspace\models\my_ssd_mobilenet `
+--pipeline_config_path=Tensorflow\workspace\models\pipeline.config `
+--num_train_steps=10000 `
+--alsologtostderr
+
+Development Status
+
+Completed
+
+Environment setup
+
+TensorFlow Object Detection API setup
+
+ASL dataset integration
+
+Dataset verification
+
+Pascal VOC processing
+
+A–Z label mapping
+
+80:20 dataset split
+
+TFRecord generation
+
+SSD MobileNet V2 FPNLite configuration
+
+26-class configuration
+
+COCO checkpoint integration
+
+Pipeline validation
+
+10,000-step fine-tuning
+
+Next
+
+Quantitative evaluation
+
+mAP calculation
+
+Precision / recall analysis
+
+Unseen-sample testing
+
+Webcam integration
+
+Real-time inference
+
+Prediction stabilization
+
+Letter-to-word conversion
+
+Continuous recognition
+
+Natural-language output
+
+Robustness testing
+
+Model optimization
+
+Project Vision
+
+The long-term vision is to transform visual sign-language communication into understandable digital language.
 
           SIGN LANGUAGE
                 │
@@ -902,4 +864,10 @@ The long-term vision of SignSpeak AI is to create a computer-vision system capab
                 ▼
      ACCESSIBLE COMMUNICATION
 
-SignSpeak AI — From visual signs to machine-understandable language.
+SignSpeak AI
+
+From visual signs to machine-understandable language.
+
+Repository
+
+GitHub — Aryaman-CSE/SignSpeak-AI
