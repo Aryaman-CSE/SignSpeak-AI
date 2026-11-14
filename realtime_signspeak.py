@@ -1,352 +1,686 @@
-﻿import os
-import glob
-import time
-import threading
-from collections import deque, defaultdict
 
+import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "1"
+
+import re
+import json
+import glob
+import time
+import shutil
+import threading
+from pathlib import Path
+from datetime import datetime
+from collections import deque, Counter
 
 import cv2
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+import mediapipe as mp
 
-tf.config.threading.set_intra_op_parallelism_threads(0)
-tf.config.threading.set_inter_op_parallelism_threads(0)
 
-from object_detection.utils import label_map_util
-from object_detection.builders import model_builder
-from object_detection.utils import config_util
+CAMERA_INDEX = 0
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
+INPUT_SIZE = 320
+MAX_HANDS = 2
+HAND_DETECTION_CONFIDENCE = 0.55
+HAND_TRACKING_CONFIDENCE = 0.55
+HAND_CROP_SCALE = 1.75
+MIN_HAND_SIZE = 45
+MIN_SIGN_CONFIDENCE = 0.40
+MIN_CLASS_MARGIN = 0.025
+HISTORY_SIZE = 5
+VOTES_REQUIRED = 3
+MIRROR = True
+LETTERS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
-BASE = "SignSpeak-AI-main" if os.path.exists("SignSpeak-AI-main/Tensorflow") else "."
-CONFIG_PATH = os.path.join(BASE, "Tensorflow", "workspace", "models", "pipeline.config")
-MODEL_DIR = os.path.join(BASE, "Tensorflow", "workspace", "models", "my_ssd_mobnet")
-LABEL_MAP_PATH = os.path.join(BASE, "Tensorflow", "workspace", "annotations", "label_map.pbtxt")
+SCRIPT_DIR = Path(__file__).resolve().parent
 
-ckpt_files = glob.glob(os.path.join(MODEL_DIR, "ckpt-*.index"))
-if not ckpt_files:
-    raise FileNotFoundError(f"No model checkpoints found in {MODEL_DIR}")
+POSSIBLE_ROOTS = [
+    SCRIPT_DIR,
+    SCRIPT_DIR / "SignSpeak-AI-main",
+    SCRIPT_DIR.parent / "SignSpeak-AI-main"
+]
 
-latest_ckpt = os.path.splitext(
-    max(ckpt_files, key=lambda x: int(os.path.basename(x).split("-")[1].split(".")[0]))
-)[0]
-print(f"[INFO] Loading Checkpoint: {latest_ckpt}")
-
-configs = config_util.get_configs_from_pipeline_file(CONFIG_PATH)
-detection_model = model_builder.build(model_config=configs["model"], is_training=False)
-ckpt = tf.compat.v2.train.Checkpoint(model=detection_model)
-ckpt.restore(latest_ckpt).expect_partial()
-
-@tf.function
-def detect_batch_fn(images):
-    images, shapes = detection_model.preprocess(images)
-    prediction_dict = detection_model.predict(images, shapes)
-    detections = detection_model.postprocess(prediction_dict, shapes)
-    return detections
-
-category_index = label_map_util.create_category_index_from_labelmap(
-    LABEL_MAP_PATH, use_display_name=True
+ROOT = next(
+    (
+        p for p in POSSIBLE_ROOTS
+        if (p / "Tensorflow/workspace/models/pipeline.config").is_file()
+    ),
+    None
 )
 
-_ = detect_batch_fn(tf.zeros([4, 320, 320, 3], dtype=tf.float32))
-
-face_cascade = cv2.CascadeClassifier(
-    os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
-)
-profile_cascade = cv2.CascadeClassifier(
-    os.path.join(cv2.data.haarcascades, "haarcascade_profileface.xml")
-)
-
-MIN_CONF = 0.38
-WINDOW_SIZE = 7
-LOCK_FRAMES_REQUIRED = 4
-EMPTY_FRAMES_TO_UNLOCK = 4
-BOX_EMA = 0.70
-
-prediction_buffer = deque(maxlen=WINDOW_SIZE)
-
-is_locked = False
-locked_letter = None
-locked_conf = 0.0
-empty_counter = 0
-
-candidate_letter = None
-candidate_conf = 0.0
-lock_progress = 0.0
-smoothed_box = None
-last_known_face = None
-face_hold_frames = 0
-top3_debug = "Place Left or Right hand in side box..."
-infer_fps = 0.0
-latest_bgr = None
-running = True
-
-def reset_lock():
-    global is_locked, locked_letter, locked_conf, empty_counter, lock_progress, candidate_letter
-    is_locked = False
-    locked_letter = None
-    locked_conf = 0.0
-    candidate_letter = None
-    empty_counter = 0
-    lock_progress = 0.0
-    prediction_buffer.clear()
-
-def get_hand_rois(w, h):
-    left_roi = (10, 105, int(w * 0.42), h - 15)
-    right_roi = (int(w * 0.58), 105, w - 10, h - 15)
-    return left_roi, right_roi
-
-def get_persistent_face(frame_bgr):
-    global last_known_face, face_hold_frames
-    h, w, _ = frame_bgr.shape
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50))
-    if len(faces) == 0:
-        faces = profile_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50))
-
-    if len(faces) > 0:
-        largest = max(faces, key=lambda r: r[2] * r[3])
-        fx, fy, fw, fh = largest
-        pad_x = int(fw * 0.35)
-        pad_top = int(fh * 0.35)
-        pad_bot = int(fh * 0.55)
-        x1 = max(0, fx - pad_x)
-        y1 = max(0, fy - pad_top)
-        x2 = min(w, fx + fw + pad_x)
-        y2 = min(h, fy + fh + pad_bot)
-        last_known_face = (x1, y1, x2, y2)
-        face_hold_frames = 45
-    elif face_hold_frames > 0:
-        face_hold_frames -= 1
-    else:
-        cx1, cy1, cx2, cy2 = int(w * 0.32), int(h * 0.12), int(w * 0.68), int(h * 0.72)
-        last_known_face = (cx1, cy1, cx2, cy2)
-
-    return last_known_face
-
-def box_overlaps_face_zone(box_px, face_zone):
-    if face_zone is None:
-        return False
-    bx1, by1, bx2, by2 = box_px
-    fx1, fy1, fx2, fy2 = face_zone
-    bcx, bcy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
-    if fx1 <= bcx <= fx2 and fy1 <= bcy <= fy2:
-        return True
-    ix1, iy1 = max(bx1, fx1), max(by1, fy1)
-    ix2, iy2 = min(bx2, fx2), min(by2, fy2)
-    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-    box_area = max(1.0, float((bx2 - bx1) * (by2 - by1)))
-    return (inter / box_area) > 0.15
-
-def inference_worker():
-    global latest_bgr, smoothed_box, top3_debug, infer_fps
-    global is_locked, locked_letter, locked_conf, empty_counter
-    global candidate_letter, candidate_conf, lock_progress
-
-    while running:
-        if latest_bgr is None:
-            time.sleep(0.005)
-            continue
-
-        t0 = time.perf_counter()
-        frame_copy = latest_bgr.copy()
-        h, w, _ = frame_copy.shape
-
-        face_zone = get_persistent_face(frame_copy)
-        clean_bgr = frame_copy.copy()
-        if face_zone is not None:
-            fx1, fy1, fx2, fy2 = face_zone
-            clean_bgr[fy1:fy2, fx1:fx2] = (128, 128, 128)
-
-        left_roi, right_roi = get_hand_rois(w, h)
-        rois = [left_roi, right_roi]
-
-        crops_rgb = []
-        for (rx1, ry1, rx2, ry2) in rois:
-            crop = clean_bgr[ry1:ry2, rx1:rx2]
-            crop_320 = cv2.resize(crop, (320, 320))
-            crop_rgb = cv2.cvtColor(crop_320, cv2.COLOR_BGR2RGB)
-            crops_rgb.append(crop_rgb)
-            crops_rgb.append(cv2.flip(crop_rgb, 1))
-
-        batch_np = np.stack(crops_rgb, axis=0)
-        input_tensor = tf.convert_to_tensor(batch_np, dtype=tf.float32)
-        dets = detect_batch_fn(input_tensor)
-
-        scores_batch = dets["detection_scores"].numpy()
-        boxes_batch = dets["detection_boxes"].numpy()
-        classes_batch = dets["detection_classes"].numpy().astype(np.int64) + 1
-
-        candidates = []
-        for b_idx in range(4):
-            roi_idx = b_idx // 2
-            is_flipped = (b_idx % 2 == 1)
-            rx1, ry1, rx2, ry2 = rois[roi_idx]
-            rw, rh = float(rx2 - rx1), float(ry2 - ry1)
-
-            for i in range(min(4, len(scores_batch[b_idx]))):
-                sc = float(scores_batch[b_idx][i])
-                cls_id = int(classes_batch[b_idx][i])
-                nm = category_index.get(cls_id, {"name": "?"})["name"]
-                ymin, xmin, ymax, xmax = boxes_batch[b_idx][i]
-
-                if is_flipped:
-                    xmin, xmax = 1.0 - xmax, 1.0 - xmin
-
-                crop_area = (ymax - ymin) * (xmax - xmin)
-                if crop_area < 0.06 or crop_area > 0.92:
-                    continue
-
-                gx1 = rx1 + xmin * rw
-                gy1 = ry1 + ymin * rh
-                gx2 = rx1 + xmax * rw
-                gy2 = ry1 + ymax * rh
-
-                if box_overlaps_face_zone((gx1, gy1, gx2, gy2), face_zone):
-                    continue
-
-                norm_global_box = np.array([gy1 / h, gx1 / w, gy2 / h, gx2 / w], dtype=np.float32)
-                candidates.append((sc, nm, norm_global_box))
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-
-        if candidates:
-            top3_debug = " | ".join([f"{c[1]}:{int(c[0]*100)}%" for c in candidates[:3]])
-        else:
-            top3_debug = "Put Left or Right hand inside a side box..."
-
-        if candidates and candidates[0][0] >= MIN_CONF:
-            empty_counter = 0
-            best_sc, best_nm, best_box = candidates[0]
-            smoothed_box = (
-                best_box
-                if smoothed_box is None
-                else (BOX_EMA * best_box + (1.0 - BOX_EMA) * smoothed_box)
-            )
-
-            if not is_locked:
-                prediction_buffer.append((best_nm, best_sc))
-        else:
-            empty_counter += 1
-            if empty_counter >= 2:
-                smoothed_box = None
-            if not is_locked:
-                prediction_buffer.append((None, 0.0))
-            elif empty_counter >= EMPTY_FRAMES_TO_UNLOCK:
-                reset_lock()
-
-        if not is_locked:
-            weights = defaultdict(float)
-            counts = defaultdict(int)
-            for lbl, sc in prediction_buffer:
-                if lbl is not None:
-                    weights[lbl] += sc
-                    counts[lbl] += 1
-
-            if weights:
-                best_lbl = max(weights.items(), key=lambda x: x[1])[0]
-                cnt = counts[best_lbl]
-                avg_sc = weights[best_lbl] / float(cnt)
-                candidate_letter = best_lbl
-                candidate_conf = avg_sc
-                lock_progress = min(1.0, cnt / float(LOCK_FRAMES_REQUIRED))
-
-                if cnt >= LOCK_FRAMES_REQUIRED:
-                    is_locked = True
-                    locked_letter = best_lbl
-                    locked_conf = avg_sc
-                    lock_progress = 1.0
-            else:
-                candidate_letter = None
-                candidate_conf = 0.0
-                lock_progress = 0.0
-
-        infer_fps = 1.0 / max(time.perf_counter() - t0, 1e-4)
-
-threading.Thread(target=inference_worker, daemon=True).start()
-
-cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-print("\n[LIVE] SignSpeak AI - Left & Right Hand Zone Detector (Face Excluded)")
-print("Controls: [SPACE / R] = Reset Lock | [Q] = Quit\n")
-
-while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        break
-
-    frame = cv2.flip(frame, 1)
-    latest_bgr = frame
-    h, w, _ = frame.shape
-
-    left_roi, right_roi = get_hand_rois(w, h)
-    for idx_r, (rx1, ry1, rx2, ry2) in enumerate([left_roi, right_roi]):
-        cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (90, 90, 90), 1)
-        zone_lbl = "LEFT HAND ZONE" if idx_r == 0 else "RIGHT HAND ZONE"
-        cv2.putText(frame, zone_lbl, (rx1 + 8, ry2 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (130, 130, 130), 1)
-
-    if smoothed_box is not None:
-        ymin, xmin, ymax, xmax = smoothed_box
-        x1, y1, x2, y2 = int(xmin * w), int(ymin * h), int(xmax * w), int(ymax * h)
-
-        green_col = (0, 255, 0)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), green_col, 3)
-
-        if is_locked:
-            box_tag = f"{locked_letter} ({int(locked_conf * 100)}%) [LOCKED]"
-        else:
-            lbl_str = candidate_letter if candidate_letter else "..."
-            box_tag = f"{lbl_str} ({int(candidate_conf * 100)}%)"
-
-        (tw, th), _ = cv2.getTextSize(box_tag, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
-        tag_y1 = max(95, y1 - th - 14)
-        tag_y2 = max(95 + th + 14, y1)
-        cv2.rectangle(frame, (x1, tag_y1), (x1 + tw + 14, tag_y2), green_col, -1)
-        cv2.putText(
-            frame, box_tag, (x1 + 7, tag_y2 - 7),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 0), 2
-        )
-
-    cv2.rectangle(frame, (0, 0), (w, 90), (18, 18, 18), -1)
-
-    if is_locked:
-        hud_text = f"DETECTED LETTER: {locked_letter} ({int(locked_conf * 100)}%)"
-        cv2.putText(frame, hud_text, (15, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.95, (0, 255, 0), 3)
-        cv2.putText(
-            frame,
-            f"LOCKED! Drop hand or press [SPACE] for next sign  |  {top3_debug}",
-            (15, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (160, 255, 160), 1
-        )
-    else:
-        scan_txt = f"Detecting: {candidate_letter}" if candidate_letter else "Show Hand in Left/Right Box"
-        cv2.putText(frame, scan_txt, (15, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.78, (0, 255, 0), 2)
-
-        bx, by, bw, bh = 385, 14, 120, 22
-        cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (55, 55, 55), -1)
-        if lock_progress > 0:
-            cv2.rectangle(frame, (bx, by), (bx + int(bw * lock_progress), by + bh), (0, 255, 0), -1)
-        cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (180, 180, 180), 1)
-
-        cv2.putText(
-            frame,
-            f"Top-3: {top3_debug}  |  [SPACE] Reset  [Q] Quit",
-            (15, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (200, 200, 200), 1
-        )
-
-    cv2.putText(
-        frame, f"FPS: {infer_fps:.1f}", (w - 115, 36),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (180, 180, 180), 2
+if ROOT is None:
+    raise FileNotFoundError(
+        "Cannot find Tensorflow/workspace/models/pipeline.config. "
+        "Save this file in the outer SignSpeak-AI-main project folder."
     )
 
-    cv2.imshow("SignSpeak AI - Real-Time ASL Sign Detector", frame)
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord("q"):
-        running = False
-        break
-    elif key == ord(" ") or key == ord("r"):
-        reset_lock()
+CONFIG_PATH = ROOT / "Tensorflow/workspace/models/pipeline.config"
+MODEL_DIR = ROOT / "Tensorflow/workspace/models/my_ssd_mobnet"
+LABEL_PATH = ROOT / "Tensorflow/workspace/annotations/label_map.pbtxt"
 
-cap.release()
-cv2.destroyAllWindows()
+
+def parse_label_map(path):
+    if not path.exists():
+        return {}
+
+    content = path.read_text(encoding="utf-8-sig")
+    labels = {}
+
+    for block in re.findall(r"item\s*\{([^}]*)\}", content, re.S):
+        id_match = re.search(r"\bid\s*:\s*(\d+)", block)
+        name_match = re.search(
+            r"\bname\s*:\s*['\"]([^'\"]+)['\"]",
+            block
+        )
+
+        if id_match and name_match:
+            labels[int(id_match.group(1))] = name_match.group(1).strip()
+
+    return labels
+
+
+def ensure_alphabet_labels(num_classes):
+    if num_classes != 26:
+        raise RuntimeError(
+            f"pipeline.config specifies {num_classes} classes, not 26. "
+            "This detector is configured for ASL letters A-Z."
+        )
+
+    expected = {
+        i: letter
+        for i, letter in enumerate(LETTERS, 1)
+    }
+
+    current = parse_label_map(LABEL_PATH)
+
+    if current != expected:
+        LABEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        if LABEL_PATH.exists():
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = LABEL_PATH.with_name(
+                f"label_map_backup_{stamp}.pbtxt"
+            )
+            shutil.copy2(LABEL_PATH, backup)
+            print("[BACKUP] Previous label map:", backup)
+
+        content = "\n".join(
+            f"item {{\n    id: {idx}\n    name: '{letter}'\n}}"
+            for idx, letter in expected.items()
+        ) + "\n"
+
+        LABEL_PATH.write_text(content, encoding="utf-8")
+        print("[FIX] Label map configured for A-Z.")
+
+    return expected
+
+
+def get_latest_checkpoint():
+    files = glob.glob(str(MODEL_DIR / "ckpt-*.index"))
+    checkpoints = []
+
+    for path in files:
+        match = re.search(r"ckpt-(\d+)\.index$", path)
+
+        if match:
+            checkpoints.append((int(match.group(1)), path[:-6]))
+
+    if not checkpoints:
+        raise FileNotFoundError(
+            f"No checkpoints found in {MODEL_DIR}"
+        )
+
+    return max(checkpoints, key=lambda item: item[0])[1]
+
+
+
+def create_detector():
+    model_path = SCRIPT_DIR / "models" / "asl_mobilenetv2" / "webcam_finetuned_model.h5"
+    class_path = SCRIPT_DIR / "models" / "asl_mobilenetv2" / "class_indices.json"
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Fine-tuned model not found: {model_path}")
+
+    with open(class_path, "r", encoding="utf-8") as f:
+        class_indices = json.load(f)
+
+    labels = {int(index): letter for letter, index in class_indices.items()}
+
+    print("[INFO] Project:", ROOT)
+    print("[INFO] Loading MobileNetV2:", model_path)
+    print("[INFO] Classes: A-Z")
+
+    model = tf.keras.models.load_model(model_path)
+
+    print("[SUCCESS] Webcam-fine-tuned MobileNetV2 loaded.")
+    return model, labels
+
+
+
+def extract_hand(frame, landmarks):
+    height, width = frame.shape[:2]
+
+    xs = np.array(
+        [point.x * width for point in landmarks.landmark],
+        dtype=np.float32
+    )
+
+    ys = np.array(
+        [point.y * height for point in landmarks.landmark],
+        dtype=np.float32
+    )
+
+    left = float(xs.min())
+    right = float(xs.max())
+    top = float(ys.min())
+    bottom = float(ys.max())
+
+    box_width = right - left
+    box_height = bottom - top
+
+    if max(box_width, box_height) < MIN_HAND_SIZE:
+        return None
+
+    side = max(box_width, box_height) * HAND_CROP_SCALE
+    side = max(side, MIN_HAND_SIZE * 2)
+
+    center_x = (left + right) / 2.0
+    center_y = (top + bottom) / 2.0
+
+    x1 = int(round(center_x - side / 2.0))
+    y1 = int(round(center_y - side / 2.0))
+    x2 = int(round(center_x + side / 2.0))
+    y2 = int(round(center_y + side / 2.0))
+
+    sx1 = max(0, x1)
+    sy1 = max(0, y1)
+    sx2 = min(width, x2)
+    sy2 = min(height, y2)
+
+    if sx2 <= sx1 or sy2 <= sy1:
+        return None
+
+    crop = frame[sy1:sy2, sx1:sx2]
+
+    crop = cv2.copyMakeBorder(
+        crop,
+        max(0, -y1),
+        max(0, y2 - height),
+        max(0, -x1),
+        max(0, x2 - width),
+        cv2.BORDER_REPLICATE
+    )
+
+    crop = cv2.resize(
+        crop,
+        (INPUT_SIZE, INPUT_SIZE),
+        interpolation=cv2.INTER_LINEAR
+    )
+
+    points = [
+        (
+            int(np.clip(point.x * width, 0, width - 1)),
+            int(np.clip(point.y * height, 0, height - 1))
+        )
+        for point in landmarks.landmark
+    ]
+
+    box = (
+        int(np.clip(left, 0, width - 1)),
+        int(np.clip(top, 0, height - 1)),
+        int(np.clip(right, 0, width - 1)),
+        int(np.clip(bottom, 0, height - 1))
+    )
+
+    return crop, box, points
+
+
+
+def classify_hands(crops, detector, labels):
+    batch = []
+
+    for crop in crops:
+        image = cv2.resize(crop, (160, 160), interpolation=cv2.INTER_AREA)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        batch.append(image)
+
+    batch = np.asarray(batch, dtype=np.float32)
+    batch = preprocess_input(batch)
+
+    probabilities = detector.predict(batch, verbose=0)
+    results = []
+
+    for scores in probabilities:
+        ranked = np.argsort(scores)[::-1]
+        best_id = int(ranked[0])
+        best_score = float(scores[best_id])
+
+        second_score = (
+            float(scores[ranked[1]]) if len(ranked) > 1 else 0.0
+        )
+
+        if (
+            best_id in labels
+            and best_score >= MIN_SIGN_CONFIDENCE
+            and best_score - second_score >= MIN_CLASS_MARGIN
+        ):
+            results.append((labels[best_id], best_score))
+        else:
+            results.append((None, best_score))
+
+    return results
+
+
+
+def stable_prediction(history):
+    valid = [
+        (label, score)
+        for label, score in history
+        if label is not None
+    ]
+
+    if not valid:
+        return None, 0.0
+
+    counts = Counter(label for label, _ in valid)
+    ranked = counts.most_common(2)
+
+    best_label, best_count = ranked[0]
+    runner_up_count = ranked[1][1] if len(ranked) > 1 else 0
+
+    if best_count < VOTES_REQUIRED or best_count <= runner_up_count:
+        return None, 0.0
+
+    confidence_values = [
+        score for label, score in valid
+        if label == best_label
+    ]
+
+    return best_label, float(np.mean(confidence_values))
+
+
+def main():
+    detector, labels = create_detector()
+    hands_solution = mp.solutions.hands
+
+    frame_lock = threading.Lock()
+    state_lock = threading.Lock()
+
+    stop_event = threading.Event()
+    reset_event = threading.Event()
+
+    latest_frame = {
+        "frame": None,
+        "sequence": 0
+    }
+
+    state = {
+        "hands": [],
+        "fps": 0.0,
+        "status": "Starting hand tracker...",
+        "error": None
+    }
+
+    def inference_worker():
+        histories = {}
+        previous_sequence = -1
+        fps_average = 0.0
+
+        try:
+            with hands_solution.Hands(
+                static_image_mode=False,
+                max_num_hands=MAX_HANDS,
+                model_complexity=0,
+                min_detection_confidence=HAND_DETECTION_CONFIDENCE,
+                min_tracking_confidence=HAND_TRACKING_CONFIDENCE
+            ) as hand_tracker:
+
+                while not stop_event.is_set():
+                    with frame_lock:
+                        frame = latest_frame["frame"]
+                        sequence = latest_frame["sequence"]
+
+                    if frame is None or sequence == previous_sequence:
+                        time.sleep(0.002)
+                        continue
+
+                    previous_sequence = sequence
+
+                    if reset_event.is_set():
+                        histories.clear()
+                        reset_event.clear()
+
+                    started = time.perf_counter()
+
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    rgb.flags.writeable = False
+
+                    hand_results = hand_tracker.process(rgb)
+
+                    detected_hands = (
+                        hand_results.multi_hand_landmarks or []
+                    )
+
+                    handedness = (
+                        hand_results.multi_handedness or []
+                    )
+
+                    crops = []
+                    boxes = []
+                    point_sets = []
+                    keys = []
+
+                    for index, hand_landmarks in enumerate(detected_hands):
+                        extracted = extract_hand(frame, hand_landmarks)
+
+                        if extracted is None:
+                            continue
+
+                        crop, box, points = extracted
+                        key = f"Hand-{index}"
+
+                        if (
+                            index < len(handedness)
+                            and handedness[index].classification
+                        ):
+                            key = handedness[index].classification[0].label
+
+                        crops.append(crop)
+                        boxes.append(box)
+                        point_sets.append(points)
+                        keys.append(key)
+
+                    predictions = (
+                        classify_hands(crops, detector, labels)
+                        if crops
+                        else []
+                    )
+
+                    visible_hands = []
+                    active_keys = set(keys)
+
+                    for key, box, points, prediction in zip(
+                        keys,
+                        boxes,
+                        point_sets,
+                        predictions
+                    ):
+                        history = histories.setdefault(
+                            key,
+                            deque(maxlen=HISTORY_SIZE)
+                        )
+
+                        history.append(prediction)
+
+                        stable_label, stable_score = stable_prediction(
+                            history
+                        )
+
+                        raw_label, raw_score = prediction
+
+                        visible_hands.append({
+                            "key": key,
+                            "box": box,
+                            "points": points,
+                            "raw_label": raw_label,
+                            "raw_score": raw_score,
+                            "label": stable_label,
+                            "score": stable_score
+                        })
+
+                    for old_key in list(histories):
+                        if old_key not in active_keys:
+                            histories.pop(old_key, None)
+
+                    elapsed = max(
+                        time.perf_counter() - started,
+                        0.000001
+                    )
+
+                    instant_fps = 1.0 / elapsed
+
+                    fps_average = (
+                        instant_fps
+                        if fps_average == 0
+                        else 0.75 * fps_average + 0.25 * instant_fps
+                    )
+
+                    if not visible_hands:
+                        message = "NO HAND - FACE AND BACKGROUND IGNORED"
+                    elif any(hand["label"] for hand in visible_hands):
+                        message = "SIGN STABLE - HOLD YOUR HAND SIGN"
+                    else:
+                        message = "HAND FOUND - ANALYZING SIGN"
+
+                    with state_lock:
+                        state["hands"] = visible_hands
+                        state["fps"] = fps_average
+                        state["status"] = message
+                        state["error"] = None
+
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+
+            with state_lock:
+                state["error"] = str(exc)
+                state["status"] = "INFERENCE ERROR - SEE TERMINAL"
+
+    camera = cv2.VideoCapture(
+        CAMERA_INDEX,
+        cv2.CAP_DSHOW
+    )
+
+    if not camera.isOpened():
+        camera.release()
+        camera = cv2.VideoCapture(CAMERA_INDEX)
+
+    if not camera.isOpened():
+        raise RuntimeError(
+            "Webcam could not be opened. Close other camera applications."
+        )
+
+    camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    camera.set(cv2.CAP_PROP_FPS, 30)
+    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    worker = threading.Thread(
+        target=inference_worker,
+        daemon=True
+    )
+
+    worker.start()
+    mirror = MIRROR
+
+    print("\n[SIGNSPEAK AI] HAND-ONLY DETECTION ACTIVE")
+    print("Controls: R = reset | F = mirror toggle | Q / ESC = quit\n")
+
+    try:
+        while camera.isOpened():
+            success, frame = camera.read()
+
+            if not success:
+                print("[ERROR] Camera frame unavailable.")
+                break
+
+            # Keep the original camera frame for model inference.
+            with frame_lock:
+                latest_frame["frame"] = frame.copy()
+                latest_frame["sequence"] += 1
+
+            with state_lock:
+                hands = list(state["hands"])
+                fps = float(state["fps"])
+                message = state["status"]
+                error = state["error"]
+
+            height, width = frame.shape[:2]
+
+            for hand in hands:
+                x1, y1, x2, y2 = hand["box"]
+
+                color = (
+                    (40, 230, 40)
+                    if hand["label"]
+                    else (0, 190, 255)
+                )
+
+                cv2.rectangle(
+                    frame,
+                    (x1, y1),
+                    (x2, y2),
+                    color,
+                    2
+                )
+
+                for px, py in hand["points"]:
+                    cv2.circle(
+                        frame,
+                        (px, py),
+                        2,
+                        (255, 180, 0),
+                        -1
+                    )
+
+                if hand["label"]:
+                    text = (
+                        f"{hand['label']} "
+                        f"{hand['score'] * 100:.0f}%"
+                    )
+                elif hand["raw_label"]:
+                    text = f"Checking {hand['raw_label']}..."
+                else:
+                    text = "Uncertain sign"
+
+                cv2.putText(
+                    frame,
+                    text,
+                    (x1, max(24, y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.62,
+                    color,
+                    2,
+                    cv2.LINE_AA
+                )
+
+            stable_hands = [
+                hand for hand in hands
+                if hand["label"]
+            ]
+
+            if stable_hands:
+                best = max(
+                    stable_hands,
+                    key=lambda item: item["score"]
+                )
+
+                headline = (
+                    f"DETECTED LETTER: {best['label']} "
+                    f"({best['score'] * 100:.0f}%)"
+                )
+
+                headline_color = (40, 240, 40)
+
+            elif hands:
+                headline = "HAND FOUND - ANALYZING"
+                headline_color = (0, 210, 255)
+
+            else:
+                headline = "SHOW YOUR HAND TO THE CAMERA"
+                headline_color = (220, 220, 220)
+
+            cv2.rectangle(
+                frame,
+                (0, 0),
+                (width, 88),
+                (20, 20, 20),
+                -1
+            )
+
+            cv2.putText(
+                frame,
+                headline,
+                (14, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.76,
+                headline_color,
+                2,
+                cv2.LINE_AA
+            )
+
+            cv2.putText(
+                frame,
+                message[:100],
+                (14, 65),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.43,
+                (220, 220, 220),
+                1,
+                cv2.LINE_AA
+            )
+
+            cv2.putText(
+                frame,
+                f"INFERENCE FPS: {fps:.1f}",
+                (width - 180, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (210, 210, 210),
+                1
+            )
+
+            cv2.putText(
+                frame,
+                "R: RESET | F: FLIP | Q: QUIT",
+                (14, height - 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (240, 240, 240),
+                1
+            )
+
+            if error:
+                cv2.putText(
+                    frame,
+                    "ERROR: " + error[:80],
+                    (14, height - 42),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (0, 0, 255),
+                    1
+                )
+
+            # Mirror only the display, not the classifier input.
+            if mirror:
+                frame = cv2.flip(frame, 1)
+
+            cv2.imshow(
+                "SignSpeak AI - Hand-Only ASL Detection",
+                frame
+            )
+
+            key = cv2.waitKey(1) & 0xFF
+
+            if key in (ord("q"), ord("Q"), 27):
+                break
+
+            if key in (ord("r"), ord("R")):
+                reset_event.set()
+
+            if key in (ord("f"), ord("F")):
+                mirror = not mirror
+
+    finally:
+        stop_event.set()
+        worker.join(timeout=3)
+        camera.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

@@ -20,3 +20,26 @@ events.out.tfevents.*
 Thumbs.db
 
 Tensorflow/workspace/images/
+
+# Local Python environment
+.venv-gpu/
+venv/
+
+# Nested duplicate repository
+SignSpeak-AI-main/
+
+# Local datasets and webcam training samples
+ASL_Dataset/
+datasets/
+models/asl_mobilenetv2/webcam_training_data_v2/
+
+# Generated files and backups
+__pycache__/
+*.pyc
+realtime_signspeak_backup*.py
+
+# Presentation outputs
+PPT_Results/
+
+# Local webcam training images
+models/asl_mobilenetv2/*training_data*/
