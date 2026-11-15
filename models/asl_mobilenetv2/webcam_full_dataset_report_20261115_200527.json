@@ -1,0 +1,33 @@
+{
+  "source_model": "C:\\Users\\aryam\\OneDrive\\Desktop\\SignSpeak-AI-main\\models\\asl_mobilenetv2\\webcam_finetuned_v2.h5",
+  "epochs_requested": 2,
+  "baseline": {
+    "test": {
+      "loss": 0.04495900869369507,
+      "accuracy": 0.9911538362503052
+    },
+    "official_test": {
+      "loss": 0.42316174507141113,
+      "accuracy": 0.9285714030265808
+    },
+    "webcam_validation": {
+      "loss": 2.075986385345459,
+      "accuracy": 0.4456140398979187
+    }
+  },
+  "candidate": {
+    "test": {
+      "loss": 0.02378884330391884,
+      "accuracy": 0.9933333396911621
+    },
+    "official_test": {
+      "loss": 0.49908462166786194,
+      "accuracy": 0.9285714030265808
+    },
+    "webcam_validation": {
+      "loss": 0.6532539129257202,
+      "accuracy": 0.7842105031013489
+    }
+  },
+  "candidate_model": "C:\\Users\\aryam\\OneDrive\\Desktop\\SignSpeak-AI-main\\models\\asl_mobilenetv2\\webcam_full_dataset_candidate_20261115_200527.h5"
+}

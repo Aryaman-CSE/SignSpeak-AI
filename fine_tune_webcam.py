@@ -14,9 +14,9 @@ WEBCAM = ROOT / "datasets" / "webcam_samples"
 MODEL_DIR = ROOT / "models" / "asl_mobilenetv2"
 
 SOURCE_MODEL = MODEL_DIR / "webcam_finetuned_model.h5"
-OUTPUT_MODEL = MODEL_DIR / "webcam_finetuned_v2.h5"
-BEST_WEIGHTS = MODEL_DIR / "webcam_v2_best.weights.h5"
-TEMP = MODEL_DIR / "webcam_training_data_v2"
+OUTPUT_MODEL = MODEL_DIR / "webcam_finetuned_round3.h5"
+BEST_WEIGHTS = MODEL_DIR / "webcam_round3_best.weights.h5"
+TEMP = MODEL_DIR / "webcam_training_data_round3"
 
 webcam_letters = [
     "E", "K", "G", "I", "H", "P", "S",
