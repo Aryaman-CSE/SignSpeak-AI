@@ -1,0 +1,5 @@
+tensorflow==2.10.1
+numpy==1.23.5
+opencv-contrib-python==4.8.1.78
+mediapipe==0.10.9
+protobuf==3.19.6
