@@ -1,873 +1,397 @@
-SignSpeak AI
+# SignSpeak AI
+
+**Real-time, hand-focused American Sign Language (ASL) alphabet recognition using computer vision and deep learning.**
+
+SignSpeak AI uses a webcam to detect visible hands and recognize ASL alphabet signs. The current real-time application combines a **MediaPipe hand tracker**, a **MobileNetV2 image classifier** for static letters, and an **LSTM sequence model** for the movement-based letters **J** and **Z**.
+
+> The current application recognizes isolated alphabet signs. It does not yet translate continuous ASL signing into words or sentences.
+
+---
+
+## Table of Contents
+
+- [What the Application Does](#what-the-application-does)
+- [Recognition Pipeline](#recognition-pipeline)
+- [Technology Stack](#technology-stack)
+- [Project Structure](#project-structure)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Run the Webcam Application](#run-the-webcam-application)
+- [Controls](#controls)
+- [Models and Required Files](#models-and-required-files)
+- [How Recognition Works](#how-recognition-works)
+- [Training and Development Scripts](#training-and-development-scripts)
+- [Dataset and Reproducibility](#dataset-and-reproducibility)
+- [Current Scope and Limitations](#current-scope-and-limitations)
+- [Troubleshooting](#troubleshooting)
+- [Future Work](#future-work)
+
+---
+
+## What the Application Does
+
+The webcam application:
+
+1. Captures frames from the computer's webcam.
+2. Uses MediaPipe Hands to locate hand landmarks.
+3. Builds a hand-centered image crop rather than classifying the whole camera frame.
+4. Classifies static hand shapes into letters A–Z with MobileNetV2.
+5. Uses a sequence of hand landmarks and an LSTM model to recognize movement-based J and Z.
+6. Applies confidence checks and temporal voting to reduce unstable frame-by-frame predictions.
+7. Displays the recognized letter, confidence, hand landmarks, bounding box, and inference FPS.
+
+The tracker is configured for up to two hands. The display can be mirrored independently of the image sent to the classifier.
+
+## Recognition Pipeline
+
+```text
+                 WEBCAM FRAME
+                       |
+                       v
+              MediaPipe Hands
+             Hand landmark tracking
+                       |
+                       v
+               Hand extraction
+          Hand-centered square crop
+                       |
+             +---------+---------+
+             |                   |
+             v                   v
+       STATIC SIGN           HAND MOTION
+       MobileNetV2           30-frame landmark
+       image classifier      sequence
+             |                   |
+             v                   v
+          A–Z scores          LSTM model
+                             (J and Z)
+             |                   |
+             +---------+---------+
+                       |
+                       v
+            Confidence and voting
+                       |
+                       v
+             Stable letter output
+                       |
+                       v
+              Webcam display
+```
+
+## Technology Stack
+
+| Technology | Purpose |
+|---|---|
+| Python 3.10 | Application runtime |
+| TensorFlow 2.10.1 / Keras | Loads and runs trained neural networks |
+| MobileNetV2 | Static ASL alphabet image classification |
+| LSTM | Recognition of movement-based J and Z |
+| MediaPipe 0.10.9 | Hand landmark detection and tracking |
+| OpenCV contrib 4.8.1.78 | Webcam capture, image processing, and display |
+| NumPy 1.23.5 | Numerical and sequence processing |
+| Git / GitHub | Source control and project hosting |
+
+The webcam application does not need the TensorFlow Object Detection API to run. The repository retains TensorFlow workspace configuration and label-map files from the project's earlier object-detection development stage.
+
+## Project Structure
+
+The repository contains the real-time application, model files, training and evaluation utilities, and the retained TensorFlow workspace configuration.
+
+```text
+SignSpeak-AI/
+|
+|-- realtime_signspeak.py
+|-- requirements.txt
+|-- README.md
+|-- .gitignore
+|-- Tutorial.ipynb
+|
+|-- models/
+|   |-- asl_mobilenetv2/
+|   |   |-- webcam_finetuned_v2.h5
+|   |   |-- class_indices.json
+|   |   |-- additional model candidates, weights and reports
+|   |
+|   |-- dynamic_signs/
+|       |-- dynamic_lstm_v2.h5
+|       |-- classes_v2.npy
+|       |-- other saved model versions
+|
+|-- Tensorflow/
+|   |-- workspace/
+|       |-- annotations/
+|       |   |-- label_map.pbtxt
+|       |
+|       |-- models/
+|           |-- pipeline.config
+|
+|-- training, data-collection and evaluation scripts
+```
+
+The tree above highlights the important files; it is not an exhaustive listing of every development utility.
 
-Real-Time Sign Language Detection Using Deep Learning
+## Requirements
 
-SignSpeak AI is a computer-vision and deep-learning project for recognizing American Sign Language (ASL) alphabet signs A–Z using an object-detection pipeline built with TensorFlow and SSD MobileNet V2 FPNLite.
+For the documented Windows setup:
 
-<p align="center">
-  <b>Dataset → Preprocessing → TFRecords → Transfer Learning → Detection</b>
-</p>
+- Windows 10 or Windows 11
+- Python **3.10.x**
+- A working webcam
+- Internet access during initial package installation
+- Sufficient disk space for the Python environment and model files
 
-Overview
+The dependency versions are pinned in `requirements.txt`:
 
-SignSpeak AI treats ASL alphabet recognition as an object-detection problem rather than simple image classification.
+```text
+tensorflow==2.10.1
+numpy==1.23.5
+opencv-contrib-python==4.8.1.78
+mediapipe==0.10.9
+protobuf==3.19.6
+```
 
-For each input image, the system is designed to:
+**Use Python 3.10.** TensorFlow 2.10.1 does not provide the same Windows wheel support for newer Python releases.
 
-detect the location of the hand sign,
+The application can run on CPU; a CUDA-enabled GPU is not required.
 
-identify the corresponding ASL alphabet class,
+## Installation
 
-assign a confidence score,
+### 1. Download the Project
 
-and return a bounding box around the detected sign.
+Download the repository ZIP from GitHub and extract it, or clone the repository:
 
-The current implementation focuses on the 26 ASL alphabet classes (A–Z) and establishes the machine-learning pipeline required for future real-time webcam detection.
+```powershell
+git clone https://github.com/Aryaman-CSE/SignSpeak-AI.git
+cd SignSpeak-AI
+```
 
-Pipeline
+If you downloaded the ZIP, open PowerShell in the extracted project root — the folder containing `realtime_signspeak.py` and `requirements.txt`.
 
-                 ┌─────────────────────┐
-                 │    ASL Dataset      │
-                 │  1,728 Images A–Z   │
-                 └──────────┬──────────┘
-                            ↓
-                 ┌─────────────────────┐
-                 │ Data Preprocessing  │
-                 │   + Verification    │
-                 └──────────┬──────────┘
-                            ↓
-                 ┌─────────────────────┐
-                 │ Pascal VOC XML      │
-                 │   Annotations       │
-                 └──────────┬──────────┘
-                            ↓
-                 ┌─────────────────────┐
-                 │ TFRecord Generation │
-                 └──────────┬──────────┘
-                            ↓
-                 ┌─────────────────────┐
-                 │ SSD MobileNet V2    │
-                 │      FPNLite        │
-                 └──────────┬──────────┘
-                            ↓
-                 ┌─────────────────────┐
-                 │   Transfer Learning │
-                 │   + Fine-Tuning     │
-                 └──────────┬──────────┘
-                            ↓
-                 ┌─────────────────────┐
-                 │ 26-Class ASL Model  │
-                 └──────────┬──────────┘
-                            ↓
-                 ┌─────────────────────┐
-                 │ Future: Live Camera │
-                 │      Detection      │
-                 └─────────────────────┘
+### 2. Create a Virtual Environment
 
-Project Status
+```powershell
+py -3.10 -m venv .venv
+```
 
-Component
+### 3. Activate the Environment
 
-Status
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
 
-Development environment
+If PowerShell blocks activation for the current terminal session, run:
 
-✅ Complete
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
 
-ASL dataset integration
+### 4. Install Dependencies
 
-✅ Complete
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-Dataset verification
+Package installation may take several minutes. Keep the virtual environment active when running the project.
 
-✅ Complete
+## Run the Webcam Application
 
-Pascal VOC processing
+From the project root, with the virtual environment activated:
 
-✅ Complete
+```powershell
+python .\realtime_signspeak.py
+```
 
-A–Z label mapping
+The application loads both trained models, initializes MediaPipe hand tracking, and opens the webcam window.
 
-✅ Complete
+**Important:** Run the script from the extracted repository structure. The application checks for `Tensorflow/workspace/models/pipeline.config` when locating the project root, even though the live recognition path loads the Keras models from the `models/` directory.
 
-Train/test split
+## Controls
 
-✅ Complete
+| Key | Action |
+|---|---|
+| `R` | Reset prediction history |
+| `F` | Toggle horizontal mirroring of the displayed camera frame |
+| `Q` or `Esc` | Quit the application |
 
-TFRecord generation
+## Models and Required Files
 
-✅ Complete
+The current webcam application loads these files:
 
-SSD MobileNet configuration
+| File | Purpose |
+|---|---|
+| `models/asl_mobilenetv2/webcam_finetuned_v2.h5` | Static A–Z MobileNetV2 classifier |
+| `models/asl_mobilenetv2/class_indices.json` | Letter-to-class-index mapping |
+| `models/dynamic_signs/dynamic_lstm_v2.h5` | LSTM model for dynamic J/Z recognition |
+| `models/dynamic_signs/classes_v2.npy` | Class labels for the dynamic model |
+| `Tensorflow/workspace/models/pipeline.config` | Required by the current project-root detection check |
+| `Tensorflow/workspace/annotations/label_map.pbtxt` | Retained A–Z label map from the object-detection workflow |
 
-✅ Complete
+Do not rename or move these files unless you also update the corresponding paths in the application.
 
-Transfer-learning setup
+The repository contains other model candidates, checkpoints, weights, and evaluation reports from development. **The live application currently loads the exact model paths listed in the table above.** The presence of another candidate model in the repository does not mean the application automatically uses it.
 
-✅ Complete
+## How Recognition Works
 
-Pipeline validation
+### 1. Hand Detection and Cropping
 
-✅ Complete
+MediaPipe Hands detects hand landmarks in the camera frame. The application uses the landmark coordinates to calculate a hand region, expands it to a square crop, pads regions that extend beyond the frame, and resizes the crop for classification.
 
-10,000-step fine-tuning
+This hand-focused pipeline is intended to keep the classifier focused on the hand rather than treating a face or unrelated background object as a sign.
 
-✅ Complete
+### 2. Static Alphabet Recognition
 
-Quantitative evaluation
+The hand crop is resized to the MobileNetV2 input dimensions, converted from BGR to RGB, and passed through the MobileNetV2 preprocessing function.
 
-🔄 Pending
+The classifier produces class scores for the alphabet.
 
-Webcam inference
+A prediction is accepted only when it passes the configured confidence threshold and the margin between the highest and second-highest class scores.
 
-🔄 Planned
+### 3. Dynamic J and Z Recognition
 
-Word formation
+J and Z involve movement. The application maintains a sequence of 30 hand-landmark frames and passes the sequence to the LSTM model when sufficient movement is detected.
 
-🔄 Planned
+Static MobileNetV2 predictions for J and Z are suppressed so that these letters are recognized through the movement-based path.
 
-Continuous recognition
+### 4. Prediction Stabilization
 
-🔄 Planned
+The application keeps a short history of predictions for each tracked hand. A displayed letter must receive the required number of votes in the recent history.
 
-Dataset
+This helps reduce rapid changes between letters when confidence fluctuates.
 
-The project uses an ASL alphabet object-detection dataset containing annotated images for all 26 alphabet classes.
+### 5. Display
 
-Dataset at a glance
+The OpenCV window shows:
 
-Metric
+- Hand bounding box
+- Hand landmark points
+- Prediction state
+- Confidence for a stable letter
+- Estimated inference FPS
 
-Value
+## Training and Development Scripts
 
-Total Images
+The repository includes scripts used during model development, data preparation, fine-tuning, evaluation, and dynamic-sign collection.
 
-1,728
+Examples include:
 
-Classes
+- `collect_webcam_samples.py` and `collect_live_static_crops.py` — webcam sample and crop collection utilities.
+- `collect_dynamic_signs.py` — collection of landmark sequences for dynamic signs.
+- `fine_tune_webcam.py` and other fine-tuning scripts — model fine-tuning experiments.
+- `train_dynamic_lstm.py` and `train_dynamic_lstm_v2.py` — dynamic sequence-model training utilities.
+- `evaluate_static_model.py`, `evaluate_webcam_v2.py`, and round-specific evaluation scripts — model evaluation utilities.
+- `build_records.py` and related TensorFlow utilities — dataset and record preparation from the earlier object-detection workflow.
 
-26
+These are development utilities, not a single end-to-end training command. Their input folders and output paths depend on the corresponding datasets and local training setup.
 
-Training Images
+The webcam inference setup described above does not require running the training scripts.
 
-1,382
+## Dataset and Reproducibility
 
-Testing Images
+The project has used ASL alphabet image data, locally collected webcam samples and crops, and hand-landmark sequences for dynamic signs during development.
 
-346
+Large raw datasets, local webcam collections, generated training artifacts, virtual environments, and some TensorFlow development components are excluded from version control through `.gitignore`.
 
-Split
+As a result:
 
-80 : 20
+- A GitHub ZIP is intended to contain the application source and committed inference model assets.
+- The raw training datasets are not included in the ZIP.
+- Re-training or reproducing every experiment requires obtaining the relevant datasets and preparing the expected local folder structure.
+- The saved inference models are provided so the webcam application can be run without repeating model training.
 
-Annotation Format
+Training metrics and candidate-model evaluation reports should be interpreted in the context of their specific test sets. They should not be treated as a guarantee of real-world recognition accuracy.
 
-Pascal VOC XML
+## Current Scope and Limitations
 
-Annotation Type
+- The current task is isolated ASL alphabet recognition, not full sign-language translation.
+- J and Z are handled as movement-based signs; other alphabet signs use static hand images.
+- Recognition quality can vary with lighting, camera quality, hand orientation, distance, occlusion, background, and signing style.
+- The application depends on MediaPipe successfully detecting and tracking the hand.
+- The current interface displays recognized letters; it does not assemble them into words or sentences.
+- The project does not currently provide a complete continuous-sign-language translation system.
+- Recognition results can be uncertain. The confidence value is a model score, not a calibrated probability of correctness.
 
-Bounding Boxes
+## Troubleshooting
 
-Classes
+### Python 3.10 Is Not Found
 
-A  B  C  D  E  F  G  H  I  J  K  L  M
-N  O  P  Q  R  S  T  U  V  W  X  Y  Z
+Check installed Python versions:
 
-Dataset Workflow
+```powershell
+py --list
+```
 
-Raw Dataset
-     ↓
-Image / XML Verification
-     ↓
-Class Verification
-     ↓
-A–Z Label Mapping
-     ↓
-80:20 Train/Test Split
-     ↓
-Pascal VOC → TFRecord
+Install Python 3.10.x and recreate the virtual environment with:
 
-Model
+```powershell
+py -3.10 -m venv .venv
+```
 
-SSD MobileNet V2 FPNLite
+### TensorFlow Cannot Be Installed
 
-The project uses SSD MobileNet V2 FPNLite 320×320 through the TensorFlow Object Detection API.
+Confirm that the active interpreter is Python 3.10:
 
-Configuration
+```powershell
+python --version
+python -m pip --version
+```
 
-Value
+Then retry:
 
-Architecture
+```powershell
+python -m pip install -r requirements.txt
+```
 
-SSD MobileNet V2 FPNLite
+### PowerShell Does Not Allow Environment Activation
 
-Input Resolution
+For the current PowerShell window only:
 
-320 × 320
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
 
-Number of Classes
+### The Webcam Cannot Be Opened
 
-26
+- Close applications that may already be using the webcam.
+- Check Windows camera privacy permissions.
+- Reconnect an external webcam if applicable.
+- Run the application again.
 
-Framework
+### A Required Model or Configuration File Is Missing
 
-TensorFlow 2.10.1
+Check that the ZIP was fully extracted and that you are running the script from the project root.
 
-Detection API
+Verify that the required paths in [Models and Required Files](#models-and-required-files) exist and have not been renamed.
 
-TensorFlow Object Detection API
+### TensorFlow Prints CUDA or GPU Warnings
 
-Initial Weights
+The application can run on CPU.
 
-COCO
+CUDA-related warnings may appear on systems without a compatible NVIDIA CUDA setup; they do not automatically mean that CPU inference has failed. Check whether the model loads and the webcam window opens.
 
-Training Strategy
+## Future Work
 
-Transfer Learning
+Potential extensions include:
 
-SSD provides single-shot object detection, while MobileNet provides a relatively lightweight feature-extraction backbone suitable for practical detection workflows.
+1. Improve robustness across different users, backgrounds, lighting, and camera positions.
+2. Expand and systematically evaluate the training data.
+3. Improve temporal handling of dynamic signs.
+4. Add letter-to-word composition with an explicit user-controlled word boundary.
+5. Explore continuous sign recognition and sentence-level language processing.
+6. Measure performance on held-out data and real-world webcam sessions.
 
-Transfer Learning
+These are future development directions and should not be interpreted as features already implemented.
 
-The model was initialized from COCO-pretrained weights and adapted to the 26-class ASL detection task.
+---
 
-COCO Pretrained Model
-        ↓
-Load Checkpoint
-        ↓
-Configure 26 ASL Classes
-        ↓
-Fine-Tune
-        ↓
-ASL Detection Model
+## Repository
 
-This approach avoids training the complete detector entirely from random initialization.
+**GitHub:** [Aryaman-CSE/SignSpeak-AI](https://github.com/Aryaman-CSE/SignSpeak-AI)
 
-Annotation & TFRecords
+**Main application:** `realtime_signspeak.py`
 
-The dataset uses Pascal VOC XML annotations.
+**Dependency file:** `requirements.txt`
 
-Each annotation provides:
-
-image filename,
-
-image dimensions,
-
-object class,
-
-bounding-box coordinates,
-
-object location information.
-
-The annotations are converted into TensorFlow TFRecords for model training.
-
-Generated records
-
-train.record
-test.record
-
-These are generated artifacts and are intentionally excluded from version control.
-
-Label Map
-
-The project maps each alphabet letter to a unique class ID.
-
-ID
-
-Class
-
-ID
-
-Class
-
-1
-
-A
-
-14
-
-N
-
-2
-
-B
-
-15
-
-O
-
-3
-
-C
-
-16
-
-P
-
-4
-
-D
-
-17
-
-Q
-
-5
-
-E
-
-18
-
-R
-
-6
-
-F
-
-19
-
-S
-
-7
-
-G
-
-20
-
-T
-
-8
-
-H
-
-21
-
-U
-
-9
-
-I
-
-22
-
-V
-
-10
-
-J
-
-23
-
-W
-
-11
-
-K
-
-24
-
-X
-
-12
-
-L
-
-25
-
-Y
-
-13
-
-M
-
-26
-
-Z
-
-Label map:
-
-Tensorflow/workspace/annotations/label_map.pbtxt
-
-Training
-
-The model was fine-tuned for:
-
-10,000 Training Steps
-
-Training was performed on the available CPU environment.
-
-Final recorded training values
-
-Metric
-
-Value
-
-Classification Loss
-
-0.0531
-
-Localization Loss
-
-0.0117
-
-Regularization Loss
-
-0.1109
-
-Total Loss
-
-0.1757
-
-Note: Training loss should not be interpreted as detection accuracy. Quantitative evaluation using metrics such as mAP, precision, and recall is still required.
-
-Training Flow
-
-ASL Dataset
-    ↓
-Pascal VOC XML
-    ↓
-Dataset Verification
-    ↓
-Train/Test Split
-    ↓
-Label Map
-    ↓
-TFRecords
-    ↓
-Pipeline Configuration
-    ↓
-COCO Checkpoint
-    ↓
-Fine-Tuning
-    ↓
-Training Checkpoints
-
-Technology Stack
-
-Technology
-
-Role
-
-Python
-
-Core development
-
-TensorFlow 2.10.1
-
-Deep-learning framework
-
-TensorFlow Object Detection API
-
-Object-detection training
-
-SSD MobileNet V2 FPNLite
-
-Detection architecture
-
-OpenCV
-
-Image/video processing
-
-NumPy 1.23.5
-
-Numerical operations
-
-Pascal VOC
-
-Annotation format
-
-TFRecord
-
-TensorFlow training data
-
-COCO Weights
-
-Transfer-learning initialization
-
-VS Code
-
-Development
-
-PowerShell
-
-Environment and execution
-
-Git / GitHub
-
-Version control
-
-Project Structure
-
-SignSpeak AI/
-│
-├── Tensorflow/
-│   ├── scripts/
-│   │   └── generate_tfrecord.py
-│   │
-│   └── workspace/
-│       ├── annotations/
-│       │   ├── label_map.pbtxt
-│       │   └── .gitkeep
-│       │
-│       └── models/
-│           ├── pipeline.config
-│           └── .gitkeep
-│
-├── scripts/
-│   ├── collect_images.py
-│   ├── create_custom_tf_record.py
-│   ├── create_pascal_tf_record.py
-│   └── model_main_tf2.py
-│
-├── Tutorial.ipynb
-├── .gitignore
-├── README.md
-└── labelimg_error.txt
-
-Files intentionally excluded
-
-To keep the repository manageable, the following are excluded through .gitignore:
-
-Raw datasets
-
-TFRecord files
-
-Pretrained model weights
-
-Training checkpoints
-
-Exported models
-
-TensorFlow Models source repository
-
-Virtual environments
-
-Python cache files
-
-Generated training artifacts
-
-Real-Time Detection
-
-The planned real-time system will connect the trained model to an OpenCV camera feed.
-
-┌──────────────┐
-│    Webcam    │
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│ Capture Frame│
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│ Preprocessing│
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│   Inference  │
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│  Detection   │
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│ A–Z + Score  │
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│ Bounding Box │
-└──────────────┘
-
-A confidence threshold can be used to filter weak predictions.
-
-Current status: webcam inference is a planned next stage and is not yet marked as completed.
-
-Future Roadmap
-
-01 — Alphabet Detection
-
-Hand Sign → A–Z
-
-The current model establishes the alphabet-detection foundation.
-
-02 — Live Webcam Detection
-
-Webcam → Detection → A–Z
-
-Integrate the trained detector with OpenCV.
-
-03 — Prediction Stabilization
-
-Reduce frame-to-frame prediction noise using confidence filtering and temporal smoothing.
-
-Frame 1 → A
-Frame 2 → A
-Frame 3 → A
-Frame 4 → A
-       ↓
- Stable A
-
-04 — Word Formation
-
-H → E → L → L → O
-             ↓
-           HELLO
-
-05 — Continuous Sign Recognition
-
-Move from isolated alphabet signs toward continuous sign sequences.
-
-06 — Natural Language Output
-
-Hand Signs
-    ↓
-Letters
-    ↓
-Words
-    ↓
-Sentences
-    ↓
-Natural Language
-
-Current Limitations
-
-Isolated Signs
-
-The current dataset focuses on individual alphabet signs rather than continuous signing.
-
-Dataset Dependence
-
-Detection performance depends on how well real-world visual conditions are represented by the training dataset.
-
-Environmental Variation
-
-Lighting, background, camera angle, hand orientation, distance, and occlusion may affect predictions.
-
-Evaluation
-
-The current training result provides loss values but does not yet provide a complete quantitative accuracy evaluation.
-
-Continuous Translation
-
-The current system recognizes alphabet classes and does not yet perform complete sentence-level sign-language translation.
-
-Team Contributions
-
-Member 1 — Dataset & Preprocessing
-
-ASL dataset integration and verification
-
-Train/test preparation
-
-Pascal VOC annotation processing
-
-A–Z label mapping
-
-TFRecord generation
-
-Member 2 — Model & Configuration
-
-SSD MobileNet V2 FPNLite setup
-
-26-class model configuration
-
-Pipeline configuration
-
-Pipeline validation
-
-COCO checkpoint integration
-
-Member 3 — Training & System Development
-
-TensorFlow training environment setup
-
-Dependency and configuration resolution
-
-Model fine-tuning
-
-Training-loss monitoring
-
-Detection/inference pipeline preparation
-
-Learning Outcomes
-
-This project provides practical experience with:
-
-Computer vision
-
-Object detection
-
-Deep learning
-
-Transfer learning
-
-Dataset engineering
-
-Pascal VOC annotations
-
-Bounding-box processing
-
-TFRecord generation
-
-TensorFlow Object Detection API
-
-Model configuration
-
-Fine-tuning
-
-Training and debugging
-
-Real-time inference architecture
-
-Git and GitHub project management
-
-Core Engineering Principle
-
-Dataset
-   ↓
-Annotations
-   ↓
-Label Mapping
-   ↓
-TFRecords
-   ↓
-Configuration
-   ↓
-Training
-   ↓
-Evaluation
-   ↓
-Inference
-
-A reliable AI system depends on the consistency of the entire pipeline, not only the neural network.
-
-Reproducibility
-
-The repository contains the project source code, configuration files, label map, and supporting scripts.
-
-Large generated files are excluded from GitHub.
-
-To reproduce the complete training pipeline, the corresponding dataset, TensorFlow Models/Object Detection API components, and pretrained checkpoint are also required.
-
-Installation
-
-Create a Python virtual environment:
-
-python -m venv venv
-
-Activate it on Windows:
-
-venv\Scripts\Activate.ps1
-
-Install the primary dependencies:
-
-pip install tensorflow==2.10.1
-pip install numpy==1.23.5
-pip install opencv-python==4.8.1.78
-pip install tensorflow-io==0.27.0
-pip install lvis
-pip install tf-models-official==2.10.1
-
-The TensorFlow Object Detection API must also be available through the TensorFlow Models repository.
-
-Training Command
-
-After preparing the dataset and configuring the TensorFlow Object Detection API:
-
-$env:PYTHONPATH="$PWD\Tensorflow\models\research;$PWD\Tensorflow\models\research\slim"
-
-Run training with:
-
-python scripts\model_main_tf2.py `
---model_dir=Tensorflow\workspace\models\my_ssd_mobilenet `
---pipeline_config_path=Tensorflow\workspace\models\pipeline.config `
---num_train_steps=10000 `
---alsologtostderr
-
-Development Status
-
-Completed
-
-Environment setup
-
-TensorFlow Object Detection API setup
-
-ASL dataset integration
-
-Dataset verification
-
-Pascal VOC processing
-
-A–Z label mapping
-
-80:20 dataset split
-
-TFRecord generation
-
-SSD MobileNet V2 FPNLite configuration
-
-26-class configuration
-
-COCO checkpoint integration
-
-Pipeline validation
-
-10,000-step fine-tuning
-
-Next
-
-Quantitative evaluation
-
-mAP calculation
-
-Precision / recall analysis
-
-Unseen-sample testing
-
-Webcam integration
-
-Real-time inference
-
-Prediction stabilization
-
-Letter-to-word conversion
-
-Continuous recognition
-
-Natural-language output
-
-Robustness testing
-
-Model optimization
-
-Project Vision
-
-The long-term vision is to transform visual sign-language communication into understandable digital language.
-
-          SIGN LANGUAGE
-                │
-                ▼
-        HAND SIGN DETECTION
-                │
-                ▼
-          LETTER RECOGNITION
-                │
-                ▼
-          WORD FORMATION
-                │
-                ▼
-       CONTINUOUS RECOGNITION
-                │
-                ▼
-        SENTENCE GENERATION
-                │
-                ▼
-     ACCESSIBLE COMMUNICATION
-
-SignSpeak AI
-
-From visual signs to machine-understandable language.
-
-Repository
-
-GitHub — Aryaman-CSE/SignSpeak-AI
+**Project:** SignSpeak AI — real-time, hand-focused ASL alphabet recognition.
