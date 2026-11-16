@@ -55,17 +55,13 @@ MAX_HANDS = 2
 HAND_DETECTION_CONFIDENCE = 0.55
 
 HAND_TRACKING_CONFIDENCE = 0.55
-
-HAND_CROP_SCALE = 1.75
-
+HAND_CROP_SCALE = 1.40
 MIN_HAND_SIZE = 45
 
 MIN_SIGN_CONFIDENCE = 0.40
 
 MIN_CLASS_MARGIN = 0.025
-
-HISTORY_SIZE = 5
-
+HISTORY_SIZE = 7
 VOTES_REQUIRED = 3
 
 MIRROR = True
@@ -560,58 +556,52 @@ def classify_hands(crops, detector, labels):
 
 
 def stable_prediction(history):
+    recent = list(history)[-HISTORY_SIZE:]
+    if not recent:
+        return None, 0.0
 
-          valid = [
+    evidence = {}
+    confidence_total = {}
+    weight_total = {}
+    support = {}
+    recent_support = {}
+    last_age = {}
 
-                    (label, score)
+    for index, (label, score) in enumerate(recent):
+        if label is None:
+            continue
+        age = len(recent) - 1 - index
+        score = float(np.clip(score, 0.0, 1.0))
+        weight = (0.82 ** age) * (0.55 + 0.45 * score)
+        evidence[label] = evidence.get(label, 0.0) + weight
+        confidence_total[label] = confidence_total.get(label, 0.0) + score * weight
+        weight_total[label] = weight_total.get(label, 0.0) + weight
+        support[label] = support.get(label, 0) + 1
+        if age <= 3:
+            recent_support[label] = recent_support.get(label, 0) + 1
+        last_age[label] = age
 
-                    for label, score in history
+    if not evidence:
+        return None, 0.0
 
-                    if label is not None
+    ranked = sorted(evidence.items(), key=lambda item: item[1], reverse=True)
+    best_label, best_weight = ranked[0]
+    runner_up_weight = ranked[1][1] if len(ranked) > 1 else 0.0
+    total_weight = sum(evidence.values())
+    dominance = best_weight / max(total_weight, 1e-8)
+    average_confidence = confidence_total[best_label] / max(weight_total[best_label], 1e-8)
 
-          ]
+    # Require repeated support, including recent evidence, but tolerate brief missed frames.
+    if support[best_label] < max(3, VOTES_REQUIRED):
+        return None, 0.0
+    if recent_support.get(best_label, 0) < 2 or last_age[best_label] > 2:
+        return None, 0.0
+    if dominance < 0.48 or best_weight < runner_up_weight * 1.10:
+        return None, 0.0
+    if average_confidence < MIN_SIGN_CONFIDENCE:
+        return None, 0.0
 
-
-
-          if not valid:
-
-                    return None, 0.0
-
-
-
-          counts = Counter(label for label, _ in valid)
-
-          ranked = counts.most_common(2)
-
-
-
-          best_label, best_count = ranked[0]
-
-          runner_up_count = ranked[1][1] if len(ranked) > 1 else 0
-
-
-
-          if best_count < VOTES_REQUIRED or best_count <= runner_up_count:
-
-                    return None, 0.0
-
-
-
-          confidence_values = [
-
-                    score for label, score in valid
-
-                    if label == best_label
-
-          ]
-
-
-
-          return best_label, float(np.mean(confidence_values))
-
-
-
-
+    return best_label, float(average_confidence)
 
 def load_dynamic_model():
 
